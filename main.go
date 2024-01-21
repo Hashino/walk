@@ -33,11 +33,13 @@ var (
 	bar           = lipgloss.NewStyle().Background(lipgloss.Color("#5C5C5C")).Foreground(lipgloss.Color("#FFFFFF"))
 	search        = lipgloss.NewStyle().Background(lipgloss.Color("#499F1C")).Foreground(lipgloss.Color("#FFFFFF"))
 	danger        = lipgloss.NewStyle().Background(lipgloss.Color("#FF0000")).Foreground(lipgloss.Color("#FFFFFF"))
+	folder        = lipgloss.NewStyle().Background(lipgloss.Color("#4c566a")).Foreground(lipgloss.Color("#FFFFFF"))
 	fileSeparator = string(filepath.Separator)
-	showIcons     = false
+	showIcons     = true
 )
 
 var (
+  keyEditor    = key.NewBinding(key.WithKeys("v"))
 	keyForceQuit = key.NewBinding(key.WithKeys("ctrl+c"))
 	keyQuit      = key.NewBinding(key.WithKeys("esc"))
 	keyQuitQ     = key.NewBinding(key.WithKeys("q"))
@@ -74,6 +76,8 @@ func main() {
 		panic(err)
 	}
 
+  parseIcons()
+
 	for i := 1; i < len(os.Args); i++ {
 		if os.Args[i] == "--help" || os.Args[1] == "-h" {
 			usage()
@@ -81,9 +85,8 @@ func main() {
 		if os.Args[i] == "--version" || os.Args[1] == "-v" {
 			version()
 		}
-		if os.Args[i] == "--icons" {
-			showIcons = true
-			parseIcons()
+		if os.Args[i] == "--noicons" {
+			showIcons = false
 			continue
 		}
 		startPath, err = filepath.Abs(os.Args[1])
@@ -100,6 +103,7 @@ func main() {
 		width:     80,
 		height:    60,
 		positions: make(map[string]position),
+    previewMode: true,
 	}
 	m.list()
 
@@ -218,43 +222,51 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.performPendingDeletions()
 			return m, tea.Quit
 
-		case key.Matches(msg, keyOpen):
-			m.searchMode = false
-			filePath, ok := m.filePath()
-			if !ok {
-				return m, nil
-			}
-			if fi := fileInfo(filePath); fi.IsDir() {
-				// Enter subdirectory.
-				m.path = filePath
-				if p, ok := m.positions[m.path]; ok {
-					m.c = p.c
-					m.r = p.r
-					m.offset = p.offset
-				} else {
-					m.c = 0
-					m.r = 0
-					m.offset = 0
-				}
-				m.list()
-			} else {
-				// Open file. This will block until complete.
-				return m, m.openEditor()
-			}
+    case key.Matches(msg, keyEditor):
+      if !m.searchMode {
+        return m, m.openEditor()
+      }
 
-		case key.Matches(msg, keyBack):
-			m.searchMode = false
-			m.prevName = filepath.Base(m.path)
-			m.path = filepath.Join(m.path, "..")
-			if p, ok := m.positions[m.path]; ok {
-				m.c = p.c
-				m.r = p.r
-				m.offset = p.offset
-			} else {
-				m.findPrevName = true
-			}
-			m.list()
-			return m, nil
+		case key.Matches(msg, keyOpen, keyRight, keyVimRight):
+      if !m.searchMode {
+        m.searchMode = false
+        filePath, ok := m.filePath()
+        if !ok {
+          return m, nil
+        }
+        if fi := fileInfo(filePath); fi.IsDir() {
+          // Enter subdirectory.
+          m.path = filePath
+          if p, ok := m.positions[m.path]; ok {
+            m.c = p.c
+            m.r = p.r
+            m.offset = p.offset
+          } else {
+            m.c = 0
+            m.r = 0
+            m.offset = 0
+          }
+          m.list()
+        } else {
+          // Open file. This will block until complete.
+          return m, m.openEditor()
+        }
+      }
+		case key.Matches(msg, keyBack, keyLeft, keyVimLeft):
+      if !m.searchMode {
+        m.searchMode = false
+        m.prevName = filepath.Base(m.path)
+        m.path = filepath.Join(m.path, "..")
+        if p, ok := m.positions[m.path]; ok {
+          m.c = p.c
+          m.r = p.r
+          m.offset = p.offset
+        } else {
+          m.findPrevName = true
+        }
+        m.list()
+        return m, nil
+      }
 
 		case key.Matches(msg, keyUp):
 			m.moveUp()
@@ -288,22 +300,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keyVimDown):
 			if !m.searchMode {
 				m.moveDown()
-			}
-
-		case key.Matches(msg, keyLeft):
-			m.moveLeft()
-
-		case key.Matches(msg, keyVimLeft):
-			if !m.searchMode {
-				m.moveLeft()
-			}
-
-		case key.Matches(msg, keyRight):
-			m.moveRight()
-
-		case key.Matches(msg, keyVimRight):
-			if !m.searchMode {
-				m.moveRight()
 			}
 
 		case key.Matches(msg, keySearch):
@@ -403,7 +399,7 @@ func (m *model) View() string {
 	height := m.listHeight()
 
 	var names [][]string
-	names, m.rows, m.columns = wrap(m.files, width, height, func(name string, i, j int) {
+	names, m.rows, m.columns = wrap(m.files, 1, height, func(name string, i, j int) {
 		if m.findPrevName && m.prevName == name {
 			m.c = i
 			m.r = j
@@ -675,21 +671,18 @@ func (m *model) filePath() (string, bool) {
 }
 
 func (m *model) openEditor() tea.Cmd {
-	filePath, ok := m.filePath()
-	if !ok {
-		return nil
-	}
-
-	cmdline := Split(lookup([]string{"WALK_EDITOR", "EDITOR"}, "less"), " ")
-	cmdline = append(cmdline, filePath)
-
-	execCmd := exec.Command(cmdline[0], cmdline[1:]...)
-	return tea.ExecProcess(execCmd, func(err error) tea.Msg {
-		// Note: we could return a message here indicating that editing is
-		// finished and altering our application about any errors. For now,
-		// however, that's not necessary.
-		return nil
-	})
+    filePath, ok := m.filePath()
+    if !ok {
+      return nil
+    }
+ 
+    execCmd := exec.Command("nvim", filePath, "-c", "cd " + m.path, "-c", "NvimTreeToggle",)
+    return tea.ExecProcess(execCmd, func(err error) tea.Msg {
+      // Note: we could return a message here indicating that editing is
+      // finished and altering our application about any errors. For now,
+      // however, that's not necessary.
+      return nil
+    })
 }
 
 func (m *model) preview() {
@@ -803,6 +796,9 @@ start:
 	rows := int(math.Ceil(float64(len(files)) / float64(columns)))
 	names := make([][]string, columns)
 	n := 0
+  
+
+
 
 	for i := 0; i < columns; i++ {
 		names[i] = make([]string, rows)
@@ -901,7 +897,7 @@ func usage() {
 	put("    dd\tDelete file or dir")
 	put("    y\tYank current directory path to clipboard")
 	put("\n  Flags:\n")
-	put("    --icons\tdisplay icons")
+	put("    --noicons\thide icons")
 	_ = w.Flush()
 	_, _ = fmt.Fprintf(os.Stderr, "\n")
 	os.Exit(1)
