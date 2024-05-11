@@ -676,7 +676,7 @@ func (m *model) openEditor() tea.Cmd {
       return nil
     }
  
-    execCmd := exec.Command("nvim", filePath, "-c", "cd " + m.path, "-c", "NvimTreeToggle",)
+    execCmd := exec.Command("nvim", filePath, "-c", "cd " + m.path, "-c", "",)
     return tea.ExecProcess(execCmd, func(err error) tea.Msg {
       // Note: we could return a message here indicating that editing is
       // finished and altering our application about any errors. For now,
